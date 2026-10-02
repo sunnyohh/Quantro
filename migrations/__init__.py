@@ -1,0 +1,1 @@
+"""Frozen database migration definitions."""

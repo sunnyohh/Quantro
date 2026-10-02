@@ -67,8 +67,11 @@ class Allocation:
 
     def validate(self) -> None:
         for value in (self.principal, self.cash_total, self.cash_reserved,
-                      self.cash_unsettled, self.position_cost):
+            self.cash_unsettled):
             money(value)
+        if (not isinstance(self.position_cost, Decimal) or not self.position_cost.is_finite()
+                or self.position_cost < 0):
+            raise DomainError("Position cost must be a finite nonnegative Decimal")
         if self.cash_available < 0:
             raise DomainError("Reserved and unsettled cash exceed total cash")
         if (type(self.quantity) is not int or type(self.quantity_reserved) is not int
@@ -84,11 +87,17 @@ class Account:
     execution_mode: str = "PAPER"
     gate_state: str = "CLOSED"
     revision: int = 0
+    lease_token: str | None = None
+    lease_until: datetime | None = None
 
     def validate(self) -> None:
         money(self.unallocated_cash)
         if self.currency != "KRW" or self.execution_mode not in {"PAPER", "BACKTEST"}:
             raise DomainError("Initial core supports only KRW PAPER/BACKTEST accounts")
+        if self.gate_state not in {"OPEN", "CLOSED", "RECONCILIATION_REQUIRED"}:
+            raise DomainError("Invalid execution gate")
+        if self.lease_until is not None:
+            aware(self.lease_until)
 
 
 @dataclass(frozen=True)
@@ -132,6 +141,16 @@ class State:
     schedules: dict = field(default_factory=dict)
     occurrences: dict = field(default_factory=dict)
     commands: dict = field(default_factory=dict)
+    assignments: dict = field(default_factory=dict)
+    assignment_history: dict = field(default_factory=dict)
+    evaluations: dict = field(default_factory=dict)
+    orders: dict = field(default_factory=dict)
+    fills: dict = field(default_factory=dict)
+    outbox: dict = field(default_factory=dict)
+    risk_policies: dict = field(default_factory=dict)
+    daily_usage: dict = field(default_factory=dict)
+    simulation_runs: dict = field(default_factory=dict)
+    marks: dict = field(default_factory=dict)
 
     def validate(self) -> None:
         for account in self.accounts.values():
@@ -145,3 +164,5 @@ class State:
             if scope in scopes:
                 raise Conflict("One allocation per account and instrument")
             scopes.add(scope)
+        from .trading import validate_trading_state
+        validate_trading_state(self)

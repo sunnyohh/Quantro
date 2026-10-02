@@ -16,12 +16,12 @@ class BudgetService:
                  id_factory: Callable[[], str] = lambda: str(uuid4())) -> None:
         self.uow_factory, self.clock, self.id_factory = uow_factory, clock, id_factory
 
-    def create_account(self, account_id: str, initial_cash: Decimal) -> Account:
+    def create_account(self, account_id: str, initial_cash: Decimal, *, execution_mode: str = "PAPER") -> Account:
         money(initial_cash)
         with self.uow_factory() as uow:
             if account_id in uow.state.accounts:
                 raise Conflict("Account already exists")
-            account = Account(account_id, initial_cash)
+            account = Account(account_id, initial_cash, execution_mode=execution_mode)
             uow.state.accounts[account_id] = account
             self._ledger(uow, account_id, None, initial_cash, "INITIAL_DEPOSIT",
                          "external_clearing", "unallocated_cash", self.clock.now(), "setup", account_id)
@@ -117,6 +117,20 @@ class BudgetService:
             result = self._process(uow, through.astimezone(timezone.utc))
             uow.commit()
             return deepcopy(result)
+
+    def pause_schedule(self, allocation_id: str, *, expected_revision: int) -> None:
+        now = aware(self.clock.now()).astimezone(timezone.utc)
+        with self.uow_factory() as uow:
+            allocation = uow.state.allocations[allocation_id]
+            if allocation.revision != expected_revision:
+                raise Conflict("Stale allocation revision")
+            self._process(uow, now, allocation_id)
+            for schedule in uow.state.schedules.values():
+                if schedule.allocation_id == allocation_id and schedule.effective_to is None:
+                    schedule.effective_to = now
+                    schedule.enabled = False
+            allocation.revision += 1
+            uow.commit()
 
     def _process(self, uow: UnitOfWork, through: datetime,
                  allocation_id: str | None = None) -> list[ScheduleOccurrence]:
